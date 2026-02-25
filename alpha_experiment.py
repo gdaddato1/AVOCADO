@@ -30,6 +30,7 @@ from actors import AVOCADO_Actor
 from simple_simulator import CircleSimulator, SquareSimulator
 import matplotlib.pyplot as plt
 import matplotlib
+from pathlib import Path
 
 matplotlib.rcParams['mathtext.fontset'] = 'cm'
 matplotlib.rcParams['font.family'] = 'STIXGeneral'
@@ -59,7 +60,9 @@ def compute_alphas(actor_dicts, labels, file_name):
     plt.ylabel(r'$\mathrm{o_i}$')
     plt.legend()
     # plt.show()
-    plt.savefig("images/alphas-" + file_name + ".png", format='png', bbox_inches='tight')
+    output_dir = Path("images")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_dir / ("alphas-" + file_name + ".png"), format='png', bbox_inches='tight')
 
 #---------------------------d experiment------------------------------------------
 actor_dicts = [{"a":0.3, "c":0.7, "d":2, "kappa":14.15, "epsilon":3.22, "delta":0.57, "bias":[0.]},

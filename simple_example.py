@@ -40,5 +40,6 @@ bias=[0.]
 # If alpha > 1, then it adapts the cooperation level using AVOCADO. The list of alphas is there so that you can directly
 # use AVOCADO/non-AVOCADO agents in the same line.
 actor = AVOCADO_Actor(agent_radius, 0.1, alpha=[100.], a=a, c=c, d=d, kappa=kappa, epsilon=epsilon, delta=delta, bias=[0.])
-sim = CircleSimulator(10, 3.0, [0,3, 4], actor, orca_vel=1.0, agent_vel=1.0, seed=0)
+# sim = CircleSimulator(10, 3.0, [0,3, 4], actor, orca_vel=1.0, agent_vel=1.0, seed=0)
+sim = CircleSimulator(2, 1.75, [0], actor, orca_vel=1.0, agent_vel=1.0, seed=0)
 print(sim.run_simulation(required_metrics=["collision", "sim_time", "mean_agent_time"], visualize=True, animate=True, save_visualization=False, file_name=""))
