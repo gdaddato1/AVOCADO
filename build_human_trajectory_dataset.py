@@ -67,6 +67,68 @@ def _resample_polyline(path_xy, num_steps, speed_scale=1.0):
     return _smooth_interpolate_waypoints(points, dst_u)
 
 
+def _wrap_to_pi(angle):
+    return np.arctan2(np.sin(angle), np.cos(angle))
+
+
+def _simulate_waypoint_follower(
+    path_xy,
+    num_steps,
+    dt,
+    speed_scale=1.0,
+    switch_radius=0.2,
+    blend_radius=0.8,
+    heading_gain=2.0,
+    omega_max=1.2,
+    turn_slowdown=0.6,
+):
+    points = path_xy.T.astype(np.float64)
+    n_waypoints = points.shape[0]
+
+    if n_waypoints == 0:
+        return np.zeros((num_steps, 2), dtype=np.float64)
+    if n_waypoints == 1:
+        return np.repeat(points, repeats=num_steps, axis=0)
+
+    diffs = np.diff(points, axis=0)
+    total_length = float(np.linalg.norm(diffs, axis=1).sum())
+    base_speed = (total_length / max((num_steps - 1) * dt, 1e-8)) * float(speed_scale)
+
+    xh = points[0].copy()
+    initial_heading = points[1] - points[0]
+    theta_h = float(np.arctan2(initial_heading[1], initial_heading[0]))
+    current_wp = 1
+
+    traj = np.zeros((num_steps, 2), dtype=np.float64)
+    traj[0] = xh
+
+    for t in range(1, num_steps):
+        wp_current = points[current_wp]
+        if np.linalg.norm(xh - wp_current) < switch_radius and current_wp < (n_waypoints - 1):
+            current_wp += 1
+            wp_current = points[current_wp]
+
+        wp_next = points[min(current_wp + 1, n_waypoints - 1)]
+        d_current = np.linalg.norm(xh - wp_current)
+        blend = np.exp(-((d_current / max(blend_radius, 1e-8)) ** 2))
+        target = (1.0 - blend) * wp_current + blend * wp_next
+
+        th_des = np.arctan2(target[1] - xh[1], target[0] - xh[0])
+        e_th = _wrap_to_pi(th_des - theta_h)
+        omega = np.clip(heading_gain * e_th, -omega_max, omega_max)
+        theta_h = _wrap_to_pi(theta_h + omega * dt)
+
+        speed_cmd = base_speed / (1.0 + turn_slowdown * abs(omega))
+        xh = xh + speed_cmd * np.array([np.cos(theta_h), np.sin(theta_h)]) * dt
+
+        if current_wp == (n_waypoints - 1) and np.linalg.norm(xh - points[-1]) < switch_radius:
+            xh = points[-1].copy()
+
+        traj[t] = xh
+
+    return traj
+
+
 def _velocities(positions, dt):
     vel = np.zeros_like(positions)
     vel[1:] = (positions[1:] - positions[:-1]) / dt
@@ -84,6 +146,12 @@ def build_dataset(
     num_steps,
     dt,
     seed,
+    trajectory_model,
+    switch_radius,
+    blend_radius,
+    heading_gain,
+    omega_max,
+    turn_slowdown,
 ):
     rng = np.random.default_rng(seed)
     human_specs = generate_human_paths(
@@ -107,7 +175,20 @@ def build_dataset(
         robot_start, robot_goal = make_robot_start_goal(scenario, path, rng=rng)
 
         for speed in speed_scales:
-            h_pos = _resample_polyline(path, num_steps=num_steps, speed_scale=speed)
+            if trajectory_model == "kinematic":
+                h_pos = _simulate_waypoint_follower(
+                    path,
+                    num_steps=num_steps,
+                    dt=dt,
+                    speed_scale=speed,
+                    switch_radius=switch_radius,
+                    blend_radius=blend_radius,
+                    heading_gain=heading_gain,
+                    omega_max=omega_max,
+                    turn_slowdown=turn_slowdown,
+                )
+            else:
+                h_pos = _resample_polyline(path, num_steps=num_steps, speed_scale=speed)
             h_vel = _velocities(h_pos, dt=dt)
 
             for robot_speed in robot_speeds:
@@ -163,6 +244,17 @@ def parse_args():
     parser.add_argument("--dt", type=float, default=0.1, help="Timestep duration")
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
     parser.add_argument(
+        "--trajectory-model",
+        choices=["interpolated", "kinematic"],
+        default="kinematic",
+        help="Trajectory generation model from waypoints",
+    )
+    parser.add_argument("--switch-radius", type=float, default=0.2, help="Waypoint switching distance for kinematic model")
+    parser.add_argument("--blend-radius", type=float, default=0.8, help="Waypoint blend distance for kinematic model")
+    parser.add_argument("--heading-gain", type=float, default=2.0, help="Heading controller gain for kinematic model")
+    parser.add_argument("--omega-max", type=float, default=1.2, help="Max angular speed [rad/s] for kinematic model")
+    parser.add_argument("--turn-slowdown", type=float, default=0.6, help="Turn-dependent slowdown factor for kinematic model")
+    parser.add_argument(
         "--scenarios",
         nargs="+",
         default=DEFAULT_SCENARIOS,
@@ -200,6 +292,12 @@ def main():
         num_steps=args.num_steps,
         dt=args.dt,
         seed=args.seed,
+        trajectory_model=args.trajectory_model,
+        switch_radius=args.switch_radius,
+        blend_radius=args.blend_radius,
+        heading_gain=args.heading_gain,
+        omega_max=args.omega_max,
+        turn_slowdown=args.turn_slowdown,
     )
     print("Dataset generated:")
     for key, value in info.items():

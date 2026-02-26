@@ -227,6 +227,55 @@ def _goal_reached(robot_positions, robot_goal, goal_tolerance, dt):
     return False, final_distance, np.nan
 
 
+def _plot_random_trajectory_samples(
+    *,
+    sample_ids,
+    human_positions_all,
+    robot_starts_all,
+    robot_goals_all,
+    robot_rollouts_by_sample,
+    scenarios,
+    output_dir,
+):
+    import matplotlib.pyplot as plt
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for sample_id in sample_ids:
+        human_positions = human_positions_all[sample_id]
+        robot_traj = robot_rollouts_by_sample[sample_id]
+        robot_start = robot_starts_all[sample_id]
+        robot_goal = robot_goals_all[sample_id]
+        scenario = str(scenarios[sample_id])
+
+        fig, ax = plt.subplots(figsize=(6, 6))
+
+        if human_positions.ndim == 2:
+            ax.plot(human_positions[:, 0], human_positions[:, 1], color="tab:blue", linewidth=1.8, label="human")
+            ax.scatter(human_positions[0, 0], human_positions[0, 1], color="tab:blue", marker="o", s=30)
+            ax.scatter(human_positions[-1, 0], human_positions[-1, 1], color="tab:blue", marker="x", s=36)
+        elif human_positions.ndim == 3:
+            for idx in range(human_positions.shape[1]):
+                traj = human_positions[:, idx, :]
+                ax.plot(traj[:, 0], traj[:, 1], color="tab:blue", linewidth=1.0, alpha=0.6)
+
+        ax.plot(robot_traj[:, 0], robot_traj[:, 1], color="tab:orange", linewidth=2.2, label="avocado")
+        ax.scatter(robot_start[0], robot_start[1], color="tab:orange", marker="^", s=55, label="robot start")
+        ax.scatter(robot_goal[0], robot_goal[1], color="tab:green", marker="*", s=90, label="robot goal")
+
+        ax.set_title(f"sample {sample_id} | scenario: {scenario}")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.axis("equal")
+        ax.grid(True, alpha=0.25)
+        ax.legend(loc="best")
+
+        output_path = output_dir / f"trajectory_sample_{sample_id}.png"
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=150)
+        plt.close(fig)
+
+
 def evaluate_dataset(
     dataset_path,
     output_csv,
@@ -237,8 +286,19 @@ def evaluate_dataset(
     collision_distance,
     max_samples,
     extra_steps,
+    plot_random_samples,
+    plot_seed,
+    plot_output_dir,
 ):
     data = np.load(dataset_path, allow_pickle=True)
+
+    dataset_stem = dataset_path.stem.lower()
+    looks_smooth_by_name = ("kinematic" in dataset_stem) or ("smooth" in dataset_stem)
+    if not looks_smooth_by_name:
+        raise ValueError(
+            "This evaluator is configured to use only smooth human trajectories. "
+            "Please pass a smooth dataset (e.g., data/human_robot_trajectories_kinematic.npz)."
+        )
 
     human_positions_all = data["human_positions"]
     human_velocities_all = data["human_velocities"]
@@ -253,6 +313,7 @@ def evaluate_dataset(
     n_eval = min(n_total, max_samples) if max_samples is not None else n_total
 
     rows = []
+    robot_rollouts_by_sample = {}
 
     for sample_id in range(n_eval):
         human_positions = human_positions_all[sample_id]
@@ -271,6 +332,7 @@ def evaluate_dataset(
             actor_params=actor_params,
             extra_steps=extra_steps,
         )
+        robot_rollouts_by_sample[sample_id] = robot_avocado_positions
 
         min_distance_series = _distance_series_to_humans(robot_avocado_positions, human_positions)
         min_dist_avocado = float(np.min(min_distance_series))
@@ -383,12 +445,32 @@ def evaluate_dataset(
         "output_scenario_summary_csv": str(scenario_summary_csv),
     }
 
+    if plot_random_samples and n_eval > 0:
+        n_plot = min(int(plot_random_samples), n_eval)
+        rng = np.random.default_rng(plot_seed)
+        selected_ids = sorted(rng.choice(n_eval, size=n_plot, replace=False).tolist())
+        _plot_random_trajectory_samples(
+            sample_ids=selected_ids,
+            human_positions_all=human_positions_all,
+            robot_starts_all=robot_starts_all,
+            robot_goals_all=robot_goals_all,
+            robot_rollouts_by_sample=robot_rollouts_by_sample,
+            scenarios=scenarios,
+            output_dir=plot_output_dir,
+        )
+        summary["plotted_random_samples"] = selected_ids
+        summary["plot_output_dir"] = str(plot_output_dir)
+
     return summary
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Batch evaluate AVOCADO on precomputed human trajectory dataset.")
-    parser.add_argument("--dataset", default="data/human_robot_trajectories.npz", help="Input dataset .npz")
+    parser.add_argument(
+        "--dataset",
+        default="data/human_robot_trajectories_kinematic.npz",
+        help="Input smooth human trajectory dataset .npz",
+    )
     parser.add_argument("--output-csv", default="data/avocado_batch_eval.csv", help="Output CSV with per-sample metrics")
     parser.add_argument(
         "--scenario-summary-csv",
@@ -409,6 +491,23 @@ def parse_args():
     parser.add_argument("--epsilon", type=float, default=3.22)
     parser.add_argument("--delta", type=float, default=0.57)
     parser.add_argument("--bias", type=float, default=0.0)
+    parser.add_argument(
+        "--plot-random-samples",
+        type=int,
+        default=0,
+        help="If >0, save this many random evaluated trajectory plots as PNG files",
+    )
+    parser.add_argument(
+        "--plot-seed",
+        type=int,
+        default=0,
+        help="Random seed used to choose which evaluated samples are plotted",
+    )
+    parser.add_argument(
+        "--plot-output-dir",
+        default="data/trajectory_plots",
+        help="Directory where random trajectory plots are saved",
+    )
     return parser.parse_args()
 
 
@@ -421,6 +520,7 @@ def main():
 
     output_csv = Path(args.output_csv)
     scenario_summary_csv = Path(args.scenario_summary_csv)
+    plot_output_dir = Path(args.plot_output_dir)
     actor_params = {
         "agent_radius": args.agent_radius,
         "alpha": args.alpha,
@@ -443,6 +543,9 @@ def main():
         collision_distance=args.collision_distance,
         max_samples=args.max_samples,
         extra_steps=args.extra_steps,
+        plot_random_samples=args.plot_random_samples,
+        plot_seed=args.plot_seed,
+        plot_output_dir=plot_output_dir,
     )
 
     print("Batch evaluation summary:")
