@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
+from actors import AVOCADO_Actor
 
 from evaluate_dataset_avocado import (
     _distance_series_to_humans,
@@ -109,7 +110,6 @@ def compute_metrics(
     human_traj: np.ndarray,
     dt: float,
     scenario_type: str,
-    head_mode: str,
     collision_distance: float = 1.0,
 ) -> Dict[str, Any]:
     T = min(robot_traj.shape[1], human_traj.shape[1])
@@ -232,8 +232,7 @@ def compute_metrics(
     metrics["collision_distance"] = float(collision_distance)
 
     metrics["scenario"] = scenario_type
-    metrics["head_mode"] = head_mode
-    metrics["variant"] = f"{scenario_type}_{head_mode}"
+    metrics["variant"] = scenario_type
     metrics["robot_traj"] = robot_traj
     metrics["human_traj"] = human_traj
     return metrics
@@ -243,7 +242,6 @@ def simulate_social_nav(
     robot_start: np.ndarray,
     robot_goal: np.ndarray,
     human_waypoints: np.ndarray,
-    head_mode: str,
     attention_mode: str,
     v_human: float,
     v_robot: float,
@@ -253,171 +251,77 @@ def simulate_social_nav(
     par = get_opinion_params()
 
     xr = robot_start.astype(float).copy()
-    xr2 = robot_start.astype(float).copy()
-    xr3 = robot_start.astype(float).copy()
-    xr4 = robot_start.astype(float).copy()
     xr5 = robot_start.astype(float).copy()
+    xr6 = robot_start.astype(float).copy()
     xrg = robot_goal.astype(float).copy()
 
     xh = human_waypoints[:, 0].astype(float).copy()
     current_wp = 0
 
     theta = np.arctan2(xrg[1] - xr[1], xrg[0] - xr[0])
-    theta2 = theta
-    theta3 = theta
-    theta4 = theta
     theta5 = theta
+    theta6 = theta
 
     b1 = 2.0
     eps_oval = b1 / 4.0
     b2 = eps_oval * b1
     nu = -0.5
     alpha1 = 0.5
-    alpha2 = 6.0
+    alpha2 = 6.5
     xt = b1 * 0.75
     k_att = 0.7
-    k_rep = 0.4
+    k_rep = 0.6
+
+    robot_vel6 = np.zeros(2, dtype=float)
+    avocado_actor = AVOCADO_Actor(
+        agent_radius=0.2,
+        timestep=dt,
+        alpha=[100.0],
+        a=0.3,
+        c=0.7,
+        d=2.0,
+        kappa=14.15,
+        epsilon=3.22,
+        delta=0.57,
+        bias=[0.0],
+    )
 
     i2 = min(1, human_waypoints.shape[1] - 1)
     theta_h = np.arctan2(human_waypoints[1, i2] - xh[1], human_waypoints[0, i2] - xh[0])
-    theta_head = theta_h
-
-    theta_head_target = theta_head
-    head_random_timer = 0.0
-    head_random_interval = 1.0
 
     z = -0.01
-    z2 = z
-    z3 = z
-    z4 = z
     u = 0.01
-    u2 = u
-    u3 = u
-    u4 = u
 
     robot_traj = [xr.copy()]
-    robot_traj2 = [xr2.copy()]
-    robot_traj3 = [xr3.copy()]
-    robot_traj4 = [xr4.copy()]
     robot_traj5 = [xr5.copy()]
+    robot_traj6 = [xr6.copy()]
     human_traj = [xh.copy()]
     time_vec = [0.0]
 
     z_vals = [z]
     u_vals = [u]
     theta_vals = [theta]
-    theta_head_vals = [theta_head]
     eta_h_vals: List[float] = []
 
-    z_vals2 = [z2]
-    u_vals2 = [u2]
-    theta_vals2 = [theta2]
-    theta_head_vals2 = [theta_head]
-    eta_h_vals2: List[float] = []
-
-    z_vals3 = [z3]
-    u_vals3 = [u3]
-    theta_vals3 = [theta3]
-    theta_head_vals3 = [theta_head]
-    eta_h_vals3: List[float] = []
-
-    z_vals4 = [z4]
-    u_vals4 = [u4]
-    theta_vals4 = [theta4]
-    theta_head_vals4 = [theta_head]
-    eta_h_vals4: List[float] = []
-
     theta_vals5 = [theta5]
+    theta_vals6 = [theta6]
     rho5_vals = [0.0]
 
     z_hat_body_vals: List[float] = []
-    z_hat_head_vals: List[float] = []
-    z_hat_fused_vals: List[float] = []
-    z_hat_switched_vals: List[float] = []
 
     t = 0.0
     while np.linalg.norm(xr - xrg) > 0.5 and t < max_time:
         eta_body = wrap_to_pi(np.arctan2(xr[1] - xh[1], xr[0] - xh[0]) - theta_h)
-        eta_body_2 = wrap_to_pi(np.arctan2(xr2[1] - xh[1], xr2[0] - xh[0]) - theta_h)
-        eta_body_3 = wrap_to_pi(np.arctan2(xr3[1] - xh[1], xr3[0] - xh[0]) - theta_h)
-        eta_body_4 = wrap_to_pi(np.arctan2(xr4[1] - xh[1], xr4[0] - xh[0]) - theta_h)
 
         chi = float(np.linalg.norm(xh - xr))
         kappa = max(np.cos(eta_body), 0.0)
 
-        chi2 = float(np.linalg.norm(xh - xr2))
-        kappa2 = max(np.cos(eta_body_2), 0.0)
-
-        chi3 = float(np.linalg.norm(xh - xr3))
-        kappa3 = max(np.cos(eta_body_3), 0.0)
-
-        chi4 = float(np.linalg.norm(xh - xr4))
-        kappa4 = max(np.cos(eta_body_4), 0.0)
-
         desired_angle = wrap_to_pi(np.arctan2(xrg[1] - xr[1], xrg[0] - xr[0]) - theta)
         phi_r = desired_angle
 
-        desired_angle2 = wrap_to_pi(np.arctan2(xrg[1] - xr2[1], xrg[0] - xr2[0]) - theta2)
-        phi_r2 = desired_angle2
-
-        desired_angle3 = wrap_to_pi(np.arctan2(xrg[1] - xr3[1], xrg[0] - xr3[0]) - theta3)
-        phi_r3 = desired_angle3
-
-        desired_angle4 = wrap_to_pi(np.arctan2(xrg[1] - xr4[1], xrg[0] - xr4[0]) - theta4)
-        phi_r4 = desired_angle4
-
-        if head_mode == "toward_robot":
-            theta_to_robot = wrap_to_pi(np.arctan2(xr[1] - xh[1], xr[0] - xh[0]))
-            angle_diff_robot = wrap_to_pi(theta_to_robot - theta_h)
-            if angle_diff_robot < -np.pi / 2.0 or angle_diff_robot > np.pi / 2.0:
-                theta_head_desired = theta_h
-            else:
-                theta_head_desired = theta_to_robot
-            theta_head = wrap_to_pi(theta_head + 2.0 * wrap_to_pi(theta_head_desired - theta_head) * dt)
-        elif head_mode == "toward_waypoint":
-            target_idx = min(current_wp + 2, human_waypoints.shape[1] - 1)
-            target = human_waypoints[:, target_idx]
-            theta_to_goal = wrap_to_pi(np.arctan2(target[1] - xh[1], target[0] - xh[0]))
-            angle_diff_goal = wrap_to_pi(theta_to_goal - theta_h)
-            angle_diff_goal = float(np.clip(angle_diff_goal, -np.pi / 2.0, np.pi / 2.0))
-            theta_head_desired = wrap_to_pi(theta_h + angle_diff_goal)
-            theta_head = wrap_to_pi(theta_head + 2.0 * wrap_to_pi(theta_head_desired - theta_head) * dt)
-        elif head_mode == "random":
-            head_random_timer += dt
-            if head_random_timer >= head_random_interval:
-                head_random_timer = 0.0
-                random_offset = (np.random.rand() - 0.5) * np.pi
-                theta_head_target = wrap_to_pi(theta_h + random_offset)
-            theta_head_desired = theta_head_target
-            theta_head = wrap_to_pi(theta_head + 2.0 * wrap_to_pi(theta_head_desired - theta_head) * dt)
-        else:
-            raise ValueError(f"Unknown head_mode: {head_mode}")
-
         z_hat_body = np.sin(-eta_body)
 
-        eta_head = wrap_to_pi(np.arctan2(xr2[1] - xh[1], xr2[0] - xh[0]) - theta_head)
-        z_hat_head = np.sin(-eta_head)
-
-        w_head = 0.5
-        eta_eff = wrap_to_pi(eta_body * (1.0 - w_head) + eta_head * w_head)
-        z_hat_fused = np.sin(-eta_eff)
-
-        d_upper = 2.5
-        d_lower = 0.5
-        if chi4 >= d_upper:
-            r = 1.0
-        elif chi4 <= d_lower:
-            r = 0.0
-        else:
-            r = (d_upper - chi4) / (d_upper - d_lower)
-
-        eta_switched = (1.0 - r) * eta_body + r * eta_head
-        z_hat_switched = np.sin(-eta_switched)
-
         eta_h_vals.append(float(eta_body))
-        eta_h_vals2.append(float(eta_head))
-        eta_h_vals3.append(float(eta_eff))
-        eta_h_vals4.append(float(eta_switched))
 
         eps_ttc = 1e-6
         v_r = v_robot
@@ -429,61 +333,22 @@ def simulate_social_nav(
         v_proj = v_r * np.cos(eta_r) + v_h * np.cos(eta_h_ttc)
         ttc1 = chi / v_proj if v_proj > eps_ttc else np.inf
 
-        e_rh2 = (xh - xr2) / max(chi2, eps_ttc)
-        eta_r2 = wrap_to_pi(-theta2 + np.arctan2(e_rh2[1], e_rh2[0]))
-        eta_h_ttc2 = wrap_to_pi(-theta_h + np.arctan2(-e_rh2[1], -e_rh2[0]))
-        v_proj2 = v_r * np.cos(eta_r2) + v_h * np.cos(eta_h_ttc2)
-        ttc2 = chi2 / v_proj2 if v_proj2 > eps_ttc else np.inf
-
-        e_rh3 = (xh - xr3) / max(chi3, eps_ttc)
-        eta_r3 = wrap_to_pi(-theta3 + np.arctan2(e_rh3[1], e_rh3[0]))
-        eta_h_ttc3 = wrap_to_pi(-theta_h + np.arctan2(-e_rh3[1], -e_rh3[0]))
-        v_proj3 = v_r * np.cos(eta_r3) + v_h * np.cos(eta_h_ttc3)
-        ttc3 = chi3 / v_proj3 if v_proj3 > eps_ttc else np.inf
-
-        e_rh4 = (xh - xr4) / max(chi4, eps_ttc)
-        eta_r4 = wrap_to_pi(-theta4 + np.arctan2(e_rh4[1], e_rh4[0]))
-        eta_h_ttc4 = wrap_to_pi(-theta_h + np.arctan2(-e_rh4[1], -e_rh4[0]))
-        v_proj4 = v_r * np.cos(eta_r4) + v_h * np.cos(eta_h_ttc4)
-        ttc4 = chi4 / v_proj4 if v_proj4 > eps_ttc else np.inf
-
         br = 0.0
         z_dot = -par.dr * z + u * np.tanh(par.alpha_r * z + par.gamma_r * z_hat_body + br)
-        z_dot2 = -par.dr * z2 + u2 * np.tanh(par.alpha_r * z2 + par.gamma_r * z_hat_head + br)
-        z_dot3 = -par.dr * z3 + u3 * np.tanh(par.alpha_r * z3 + par.gamma_r * z_hat_fused + br)
-        z_dot4 = -par.dr * z4 + u4 * np.tanh(par.alpha_r * z4 + par.gamma_r * z_hat_switched + br)
 
         if attention_mode == "kappa":
             u_dot = (-u + attention_dynamics_kappa(par, chi, kappa)) / par.tau_u
-            u_dot2 = (-u2 + attention_dynamics_kappa(par, chi2, kappa2)) / par.tau_u
-            u_dot3 = (-u3 + attention_dynamics_kappa(par, chi3, kappa3)) / par.tau_u
-            u_dot4 = (-u4 + attention_dynamics_kappa(par, chi4, kappa4)) / par.tau_u
         elif attention_mode == "ttc":
             u_dot = (-u + attention_dynamics_ttc(par, ttc1)) / par.tau_u
-            u_dot2 = (-u2 + attention_dynamics_ttc(par, ttc2)) / par.tau_u
-            u_dot3 = (-u3 + attention_dynamics_ttc(par, ttc3)) / par.tau_u
-            u_dot4 = (-u4 + attention_dynamics_ttc(par, ttc4)) / par.tau_u
         else:
             raise ValueError(f"Unknown attention_mode: {attention_mode}")
 
         z += z_dot * dt
-        z2 += z_dot2 * dt
-        z3 += z_dot3 * dt
-        z4 += z_dot4 * dt
         u += u_dot * dt
-        u2 += u_dot2 * dt
-        u3 += u_dot3 * dt
-        u4 += u_dot4 * dt
 
         omega = par.kr * np.sin(par.beta_r * np.tanh(z) + phi_r)
-        omega2 = par.kr * np.sin(par.beta_r * np.tanh(z2) + phi_r2)
-        omega3 = par.kr * np.sin(par.beta_r * np.tanh(z3) + phi_r3)
-        omega4 = par.kr * np.sin(par.beta_r * np.tanh(z4) + phi_r4)
 
         theta = wrap_to_pi(theta + omega * dt)
-        theta2 = wrap_to_pi(theta2 + omega2 * dt)
-        theta3 = wrap_to_pi(theta3 + omega3 * dt)
-        theta4 = wrap_to_pi(theta4 + omega4 * dt)
 
         if np.linalg.norm(xh - human_waypoints[:, current_wp]) < 0.2:
             current_wp = min(current_wp + 1, human_waypoints.shape[1] - 1)
@@ -494,52 +359,23 @@ def simulate_social_nav(
         xh = xh + v_human * np.array([np.cos(theta_h), np.sin(theta_h)]) * dt
 
         robot_traj.append(xr.copy())
-        robot_traj2.append(xr2.copy())
-        robot_traj3.append(xr3.copy())
-        robot_traj4.append(xr4.copy())
         robot_traj5.append(xr5.copy())
+        robot_traj6.append(xr6.copy())
         human_traj.append(xh.copy())
 
         time_vec.append(time_vec[-1] + dt)
         z_vals.append(z)
-        z_vals2.append(z2)
-        z_vals3.append(z3)
-        z_vals4.append(z4)
         u_vals.append(u)
-        u_vals2.append(u2)
-        u_vals3.append(u3)
-        u_vals4.append(u4)
 
         theta_vals.append(theta)
-        theta_head_vals.append(theta_head)
-        theta_vals2.append(theta2)
-        theta_vals3.append(theta3)
-        theta_head_vals2.append(theta_head)
-        theta_head_vals3.append(theta_head)
-        theta_vals4.append(theta4)
-        theta_head_vals4.append(theta_head)
 
         z_hat_body_vals.append(float(z_hat_body))
-        z_hat_head_vals.append(float(z_hat_head))
-        z_hat_fused_vals.append(float(z_hat_fused))
-        z_hat_switched_vals.append(float(z_hat_switched))
         theta_vals5.append(theta5)
+        theta_vals6.append(theta6)
 
         if np.linalg.norm(xr - xrg) > 0.5:
             xr[0] += v_robot * np.cos(theta) * dt
             xr[1] += v_robot * np.sin(theta) * dt
-
-        if np.linalg.norm(xr2 - xrg) > 0.5:
-            xr2[0] += v_robot * np.cos(theta2) * dt
-            xr2[1] += v_robot * np.sin(theta2) * dt
-
-        if np.linalg.norm(xr3 - xrg) > 0.5:
-            xr3[0] += v_robot * np.cos(theta3) * dt
-            xr3[1] += v_robot * np.sin(theta3) * dt
-
-        if np.linalg.norm(xr4 - xrg) > 0.5:
-            xr4[0] += v_robot * np.cos(theta4) * dt
-            xr4[1] += v_robot * np.sin(theta4) * dt
 
         if np.linalg.norm(xr5 - xrg) > 0.5:
             gamma = -1.0 if z >= 0.0 else 1.0
@@ -605,6 +441,23 @@ def simulate_social_nav(
         else:
             rho5_current = rho5_vals[-1]
 
+        if np.linalg.norm(xr6 - xrg) > 0.5:
+            vh6 = v_human * np.array([np.cos(theta_h), np.sin(theta_h)], dtype=float)
+            cmd6 = avocado_actor.act(
+                agent_positions=xr6.reshape(1, 2),
+                other_positions=xh.reshape(1, 2),
+                agent_velocities=robot_vel6.reshape(1, 2),
+                other_velocities=vh6.reshape(1, 2),
+                agent_goals=xrg.reshape(1, 2),
+                max_vel=v_robot,
+            )[0]
+            robot_vel6 = np.asarray(cmd6, dtype=float).reshape(2)
+            xr6 = xr6 + robot_vel6 * dt
+            if np.linalg.norm(robot_vel6) > 1e-8:
+                theta6 = float(np.arctan2(robot_vel6[1], robot_vel6[0]))
+        else:
+            robot_vel6 = np.zeros(2, dtype=float)
+
         rho5_vals.append(float(rho5_current))
 
         if current_wp == human_waypoints.shape[1] - 1 and np.linalg.norm(xh - human_waypoints[:, -1]) < 0.2:
@@ -614,37 +467,17 @@ def simulate_social_nav(
 
     result = {
         "robot_traj": np.column_stack(robot_traj),
-        "robot_traj2": np.column_stack(robot_traj2),
-        "robot_traj3": np.column_stack(robot_traj3),
-        "robot_traj4": np.column_stack(robot_traj4),
         "robot_traj5": np.column_stack(robot_traj5),
+        "robot_traj_avocado": np.column_stack(robot_traj6),
         "human_traj": np.column_stack(human_traj),
         "time": np.asarray(time_vec),
         "z": np.asarray(z_vals),
-        "z2": np.asarray(z_vals2),
-        "z3": np.asarray(z_vals3),
-        "z4": np.asarray(z_vals4),
         "u": np.asarray(u_vals),
-        "u2": np.asarray(u_vals2),
-        "u3": np.asarray(u_vals3),
-        "u4": np.asarray(u_vals4),
         "theta": np.asarray(theta_vals),
-        "theta2": np.asarray(theta_vals2),
-        "theta3": np.asarray(theta_vals3),
-        "theta4": np.asarray(theta_vals4),
         "theta5": np.asarray(theta_vals5),
-        "theta_head": np.asarray(theta_head_vals),
-        "theta_head2": np.asarray(theta_head_vals2),
-        "theta_head3": np.asarray(theta_head_vals3),
-        "theta_head4": np.asarray(theta_head_vals4),
+        "theta_avocado": np.asarray(theta_vals6),
         "eta_h": np.asarray(eta_h_vals),
-        "eta_h2": np.asarray(eta_h_vals2),
-        "eta_h3": np.asarray(eta_h_vals3),
-        "eta_h4": np.asarray(eta_h_vals4),
         "z_hat_body": np.asarray(z_hat_body_vals),
-        "z_hat_head": np.asarray(z_hat_head_vals),
-        "z_hat_fused": np.asarray(z_hat_fused_vals),
-        "z_hat_switched": np.asarray(z_hat_switched_vals),
         "rho5": np.asarray(rho5_vals),
     }
     return result
@@ -686,13 +519,216 @@ def _print_improvement(
         )
     )
     print(
-        "  Values (base -> candidate): "
-        f"Path {b_path:.4f} -> {c_path:.4f} | "
-        f"MinDist {b_dist:.4f} -> {c_dist:.4f} | "
-        f"Smooth {b_smooth:.4f} -> {c_smooth:.4f} | "
-        f"MinTTCproj {b_ttc:.4f} -> {c_ttc:.4f} | "
-        f"Curv {b_curv:.4f} -> {c_curv:.4f}"
+        "  Values (candidate): "
+        f"Path {c_path:.4f} | "
+        f"MinDist {c_dist:.4f} | "
+        f"Smooth {c_smooth:.4f} | "
+        f"MinTTCproj {c_ttc:.4f} | "
+        f"Curv {c_curv:.4f}"
     )
+
+
+def _plot_legacy_comparison_samples(
+    *,
+    sample_keys: List[Tuple[int, float, float]],
+    sample_store: Dict[Tuple[int, float, float], Dict[str, Any]],
+    output_dir: Path,
+) -> None:
+    import matplotlib.pyplot as plt
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for key in sample_keys:
+        rec = sample_store[key]
+        scenario = rec["scenario"]
+        v_h = rec["v_human"]
+        v_r = rec["v_robot"]
+        robot_start = rec["robot_start"]
+        robot_goal = rec["robot_goal"]
+
+        fig, ax = plt.subplots(figsize=(7, 7))
+
+        h = rec["human_traj"]
+        ax.plot(h[0, :], h[1, :], color="tab:blue", linewidth=1.8, label="human")
+
+        ax.plot(rec["traj1_kappa"][0, :], rec["traj1_kappa"][1, :], color="tab:orange", linewidth=2.0, label="traj1 + kappa")
+        ax.plot(rec["traj1_ttc"][0, :], rec["traj1_ttc"][1, :], color="tab:green", linewidth=2.0, label="traj1 + ttc")
+        ax.plot(rec["traj5_kappa"][0, :], rec["traj5_kappa"][1, :], color="tab:red", linewidth=2.0, label="traj5 (ovals) + kappa")
+        ax.plot(rec["avocado"][0, :], rec["avocado"][1, :], color="tab:purple", linewidth=2.0, label="avocado")
+
+        ax.scatter(robot_start[0], robot_start[1], color="black", marker="^", s=60, label="robot start")
+        ax.scatter(robot_goal[0], robot_goal[1], color="black", marker="*", s=90, label="robot goal")
+
+        ax.set_title(f"sample {key[0]} | {scenario} | vh={v_h:.2f} vr={v_r:.2f}")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.axis("equal")
+        ax.grid(True, alpha=0.25)
+        ax.legend(loc="best", fontsize=8)
+
+        out_name = f"comparison_sample-{key[0]:03d}_{scenario}_vh-{v_h:.2f}_vr-{v_r:.2f}.png"
+        fig.tight_layout()
+        fig.savefig(output_dir / out_name, dpi=150)
+        plt.close(fig)
+
+
+def _animate_traj5_with_oval(
+    *,
+    human_traj: np.ndarray,
+    traj5: np.ndarray,
+    robot_start: np.ndarray,
+    robot_goal: np.ndarray,
+    output_path: Path,
+    fps: int = 20,
+) -> None:
+    import matplotlib.pyplot as plt
+    from matplotlib import animation
+
+    b1 = 2.0
+    eps_oval = b1 / 4.0
+    b2 = eps_oval * b1
+    nu = -0.5
+    xt = b1 * 0.75
+
+    T = min(human_traj.shape[1], traj5.shape[1])
+    human = human_traj[:, :T]
+    robot = traj5[:, :T]
+    theta_h_series = np.zeros(T, dtype=float)
+    if T >= 2:
+        d_h = np.diff(human, axis=1)
+        theta_h_series[1:] = np.arctan2(d_h[1, :], d_h[0, :])
+        theta_h_series[0] = theta_h_series[1]
+
+    fig, ax = plt.subplots(figsize=(7, 7))
+    ax.plot(human[0, :], human[1, :], color="tab:blue", alpha=0.25, linewidth=1.0)
+    ax.plot(robot[0, :], robot[1, :], color="tab:red", alpha=0.25, linewidth=1.0)
+
+    human_line, = ax.plot([], [], color="tab:blue", linewidth=2.0, label="human")
+    robot_line, = ax.plot([], [], color="tab:red", linewidth=2.0, label="traj5 (ovals)")
+    human_dot, = ax.plot([], [], "o", color="tab:blue", ms=6)
+    robot_dot, = ax.plot([], [], "o", color="tab:red", ms=6)
+    oval_line, = ax.plot([], [], color="tab:purple", linewidth=1.5, label="corresponding oval")
+
+    grid_x1 = np.linspace(-b1, b1, 15)
+    grid_x2 = np.linspace(-b2, b2, 11)
+    gx1, gx2 = np.meshgrid(grid_x1, grid_x2)
+    gx1 = gx1.ravel()
+    gx2 = gx2.ravel()
+    rho_grid = 1.0 - (gx1 / b1) ** 2 - (gx2 / b2) ** 2 * np.exp(nu * gx1)
+    inside = rho_grid > 0.0
+    x1_in = gx1[inside]
+    x2_in = gx2[inside]
+    qx0 = np.zeros_like(x1_in)
+    qy0 = np.zeros_like(x1_in)
+    qu0 = np.zeros_like(x1_in)
+    qv0 = np.zeros_like(x1_in)
+    vortex_quiver = ax.quiver(
+        qx0,
+        qy0,
+        qu0,
+        qv0,
+        color="tab:gray",
+        alpha=0.9,
+        angles="xy",
+        scale_units="xy",
+        scale=3.5,
+        width=0.0025,
+    )
+
+    ax.scatter(robot_start[0], robot_start[1], color="black", marker="^", s=60, label="robot start")
+    ax.scatter(robot_goal[0], robot_goal[1], color="black", marker="*", s=90, label="robot goal")
+
+    all_x = np.concatenate((human[0, :], robot[0, :], [robot_start[0], robot_goal[0]]))
+    all_y = np.concatenate((human[1, :], robot[1, :], [robot_start[1], robot_goal[1]]))
+    pad = 1.0
+    ax.set_xlim(np.min(all_x) - pad, np.max(all_x) + pad)
+    ax.set_ylim(np.min(all_y) - pad, np.max(all_y) + pad)
+    ax.set_aspect("equal", adjustable="box")
+    ax.grid(True, alpha=0.25)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.legend(loc="best", fontsize=8)
+
+    x1 = np.linspace(-b1, b1, 240)
+
+    def _oval_world_points(hx: float, hy: float, theta_orient: float):
+        inside = np.maximum(0.0, 1.0 - (x1 / b1) ** 2)
+        x2_abs = b2 * np.sqrt(inside * np.exp(-nu * x1))
+
+        x1_full = np.concatenate((x1, x1[::-1]))
+        x2_full = np.concatenate((x2_abs, -x2_abs[::-1]))
+
+        u = x1_full - xt
+        v = x2_full
+        dx = u * np.cos(theta_orient) - v * np.sin(theta_orient)
+        dy = u * np.sin(theta_orient) + v * np.cos(theta_orient)
+        return hx + dx, hy + dy
+
+    def _vortex_field_world(hx: float, hy: float, theta_orient: float):
+        sqrt_arg = (
+            (b1**2 * eps_oval**2 * x1_in**2)
+            - (2.0 * b1**2 * eps_oval**2 * x1_in * xt)
+            + (b1**2 * eps_oval**2 * xt**2)
+            + (x2_in**2 * np.exp(nu * x1_in) * b1**2)
+            - (np.exp(nu * x1_in) * xt**2 * x2_in**2)
+        )
+        r_oval = (
+            (
+                eps_oval * x1_in * xt
+                - (eps_oval * xt**2)
+                + np.sqrt(np.maximum(sqrt_arg, 0.0))
+            )
+            / (b1**2 - xt**2)
+            * b1
+            / eps_oval
+        )
+        d = xt * (1.0 - r_oval / b1)
+        x1_bar = x1_in - d
+
+        vortex_x = -(b1 / b2) * x2_in * np.exp((nu / 2.0) * x1_bar)
+        vortex_y = (
+            (b2 / b1) * x1_bar * np.exp((-nu / 2.0) * x1_bar)
+            + (x2_in**2 * np.exp((nu / 2.0) * x1_bar) * nu * (b1 / (2.0 * b2)))
+        )
+
+        pos_u = x1_in - xt
+        pos_v = x2_in
+        pos_x = hx + pos_u * np.cos(theta_orient) - pos_v * np.sin(theta_orient)
+        pos_y = hy + pos_u * np.sin(theta_orient) + pos_v * np.cos(theta_orient)
+
+        vec_x = vortex_x * np.cos(theta_orient) - vortex_y * np.sin(theta_orient)
+        vec_y = vortex_x * np.sin(theta_orient) + vortex_y * np.cos(theta_orient)
+        return pos_x, pos_y, vec_x, vec_y
+
+    def _update(frame: int):
+        human_line.set_data(human[0, : frame + 1], human[1, : frame + 1])
+        robot_line.set_data(robot[0, : frame + 1], robot[1, : frame + 1])
+        human_dot.set_data([human[0, frame]], [human[1, frame]])
+        robot_dot.set_data([robot[0, frame]], [robot[1, frame]])
+
+        theta_orient = float(theta_h_series[frame] + np.pi)
+
+        ox, oy = _oval_world_points(
+            hx=float(human[0, frame]),
+            hy=float(human[1, frame]),
+            theta_orient=theta_orient,
+        )
+        oval_line.set_data(ox, oy)
+
+        qx, qy, qu, qv = _vortex_field_world(
+            hx=float(human[0, frame]),
+            hy=float(human[1, frame]),
+            theta_orient=theta_orient,
+        )
+        vortex_quiver.set_offsets(np.column_stack((qx, qy)))
+        vortex_quiver.set_UVC(qu, qv)
+        ax.set_title(f"traj5 + oval | t={frame}")
+        return human_line, robot_line, human_dot, robot_dot, oval_line, vortex_quiver
+
+    ani = animation.FuncAnimation(fig, _update, frames=T, interval=1000 / max(1, fps), blit=False)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ani.save(str(output_path), writer="pillow", fps=fps)
+    plt.close(fig)
 
 
 def _human_state_for_opinion(
@@ -734,7 +770,6 @@ def _run_opinion_rollout_from_dataset(
     robot_speed: float,
     opinion_params: OpinionParams,
     attention_mode: str,
-    head_mode: str,
     collision_distance: float,
     goal_tolerance: float,
     extra_steps: int,
@@ -753,11 +788,6 @@ def _run_opinion_rollout_from_dataset(
     else:
         theta_h = float(np.arctan2(xh0[1] - xr[1], xh0[0] - xr[0]))
 
-    theta_head = theta_h
-    theta_head_target = theta_h
-    head_random_timer = 0.0
-    head_random_interval = 1.0
-
     z = -0.01
     u = 0.01
 
@@ -774,34 +804,7 @@ def _run_opinion_rollout_from_dataset(
 
         desired_angle = wrap_to_pi(np.arctan2(xrg[1] - xr[1], xrg[0] - xr[0]) - theta)
         phi_r = desired_angle
-
-        if head_mode == "toward_robot":
-            theta_to_robot = wrap_to_pi(np.arctan2(xr[1] - xh[1], xr[0] - xh[0]))
-            angle_diff_robot = wrap_to_pi(theta_to_robot - theta_h)
-            if angle_diff_robot < -np.pi / 2.0 or angle_diff_robot > np.pi / 2.0:
-                theta_head_desired = theta_h
-            else:
-                theta_head_desired = theta_to_robot
-            theta_head = wrap_to_pi(theta_head + 2.0 * wrap_to_pi(theta_head_desired - theta_head) * dt)
-        elif head_mode == "toward_waypoint":
-            theta_head = theta_h
-        elif head_mode == "random":
-            head_random_timer += dt
-            if head_random_timer >= head_random_interval:
-                head_random_timer = 0.0
-                random_offset = (np.random.rand() - 0.5) * np.pi
-                theta_head_target = wrap_to_pi(theta_h + random_offset)
-            theta_head_desired = theta_head_target
-            theta_head = wrap_to_pi(theta_head + 2.0 * wrap_to_pi(theta_head_desired - theta_head) * dt)
-        else:
-            raise ValueError(f"Unknown head_mode: {head_mode}")
-
-        eta_used = eta_body
-        if head_mode == "toward_robot":
-            eta_head = wrap_to_pi(np.arctan2(xr[1] - xh[1], xr[0] - xh[0]) - theta_head)
-            eta_used = 0.5 * eta_body + 0.5 * eta_head
-
-        z_hat = np.sin(-eta_used)
+        z_hat = np.sin(-eta_body)
 
         v_r_vec = robot_speed * np.array([np.cos(theta), np.sin(theta)], dtype=float)
         rel_pos = xh - xr
@@ -839,7 +842,6 @@ def evaluate_opinion_dataset(
     max_samples: int | None,
     max_vel: float,
     attention_mode: str,
-    head_mode: str,
     goal_tolerance: float,
     collision_distance: float,
     extra_steps: int,
@@ -875,7 +877,6 @@ def evaluate_opinion_dataset(
             robot_speed=robot_speed,
             opinion_params=opinion_params,
             attention_mode=attention_mode,
-            head_mode=head_mode,
             collision_distance=collision_distance,
             goal_tolerance=goal_tolerance,
             extra_steps=extra_steps,
@@ -904,7 +905,6 @@ def evaluate_opinion_dataset(
                 "speed_scale": float(speed_scales[sample_id]),
                 "robot_speed": robot_speed,
                 "attention_mode": attention_mode,
-                "head_mode": head_mode,
                 "opinion_min_dist": min_dist,
                 "opinion_path_length": path_length,
                 "opinion_mean_curvature": mean_curvature,
@@ -976,7 +976,6 @@ def evaluate_opinion_dataset(
         "n_evaluated": n_eval,
         "used_dataset_robot_speeds": bool(robot_speeds is not None),
         "attention_mode": attention_mode,
-        "head_mode": head_mode,
         "opinion_collision_rate": float(arr_collision.mean()),
         "opinion_success_rate": float(arr_success.mean()),
         "opinion_timeout_rate": float(arr_timeout.mean()),
@@ -1018,7 +1017,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--collision-distance", type=float, default=0.4, help="Collision threshold distance")
     parser.add_argument("--extra-steps", type=int, default=40, help="Extra rollout steps after dataset horizon")
     parser.add_argument("--attention-mode", choices=["kappa", "ttc"], default="ttc")
-    parser.add_argument("--head-mode", choices=["toward_waypoint", "toward_robot", "random"], default="toward_waypoint")
 
     parser.add_argument("--dr", type=float, default=2.4)
     parser.add_argument("--alpha-r", type=float, default=0.3)
@@ -1030,11 +1028,39 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--u-min", type=float, default=0.0)
     parser.add_argument("--n", type=int, default=7)
     parser.add_argument("--tau-u", type=float, default=1.0)
+    parser.add_argument(
+        "--plot-comparison-samples",
+        type=int,
+        default=0,
+        help="If >0 in generate mode, save this many random trajectory comparison plots",
+    )
+    parser.add_argument(
+        "--plot-seed",
+        type=int,
+        default=0,
+        help="Random seed used to choose comparison samples for plotting",
+    )
+    parser.add_argument(
+        "--plot-output-dir",
+        default="data/trajectory_plots_comparison",
+        help="Output directory for generated trajectory comparison plots",
+    )
+    parser.add_argument(
+        "--animate-oval-sample",
+        type=int,
+        default=-1,
+        help="If >=0 in generate mode, animate this index from available sample keys for traj5+oval",
+    )
+    parser.add_argument(
+        "--animate-oval-output",
+        default="data/trajectory_plots_comparison/traj5_oval_animation.gif",
+        help="Output GIF path for traj5+oval animation",
+    )
 
     return parser.parse_args()
 
 
-def run_legacy_generation() -> None:
+def run_legacy_generation(args: argparse.Namespace) -> None:
     try:
         from scipy.io import savemat
     except ModuleNotFoundError as exc:
@@ -1050,7 +1076,6 @@ def run_legacy_generation() -> None:
 
     N_per_scenario = 20
     scenarios = ["meeting", "meeting_delayed_arc", "abrupt_change", "step_pattern", "zigzag"]
-    head_mode_fixed = "toward_waypoint"
     attention_modes = ["kappa", "ttc"]
     v_human_list = [0.8, 1.0]
     v_robot_list = [0.5, 0.7]
@@ -1062,6 +1087,7 @@ def run_legacy_generation() -> None:
 
     np.random.seed(1234)
     metrics: List[Dict[str, Any]] = []
+    sample_store: Dict[Tuple[int, float, float], Dict[str, Any]] = {}
 
     human_data = generate_human_paths(N_per_scenario, scenarios)
     savemat(os.path.join(data_folder, "human_paths.mat"), {"human_data": human_data})
@@ -1089,13 +1115,29 @@ def run_legacy_generation() -> None:
                         robot_start,
                         robot_goal,
                         human_path,
-                        head_mode_fixed,
                         attention_mode,
                         vh,
                         vr,
                         dt,
                         max_time,
                     )
+
+                    sample_key = (s_idx, float(vh), float(vr))
+                    if sample_key not in sample_store:
+                        sample_store[sample_key] = {
+                            "scenario": scenario,
+                            "v_human": float(vh),
+                            "v_robot": float(vr),
+                            "robot_start": robot_start.copy(),
+                            "robot_goal": robot_goal.copy(),
+                        }
+                    sample_store[sample_key]["human_traj"] = sim_result["human_traj"].copy()
+                    if attention_mode == "kappa":
+                        sample_store[sample_key]["traj1_kappa"] = sim_result["robot_traj"].copy()
+                        sample_store[sample_key]["traj5_kappa"] = sim_result["robot_traj5"].copy()
+                        sample_store[sample_key]["avocado"] = sim_result["robot_traj_avocado"].copy()
+                    elif attention_mode == "ttc":
+                        sample_store[sample_key]["traj1_ttc"] = sim_result["robot_traj"].copy()
 
                     sim_result["meta"] = {
                         "scenario": scenario,
@@ -1109,7 +1151,7 @@ def run_legacy_generation() -> None:
                     }
 
                     sim_result["metrics_list"] = []
-                    variant_names = ["robot_traj", "robot_traj5"]
+                    variant_names = ["robot_traj", "robot_traj5", "robot_traj_avocado"]
                     for field in variant_names:
                         if field in sim_result:
                             r_traj = sim_result[field]
@@ -1121,7 +1163,6 @@ def run_legacy_generation() -> None:
                                 h_traj,
                                 dt,
                                 scenario,
-                                head_mode_fixed,
                                 collision_distance,
                             )
                             m["v_human"] = vh
@@ -1161,7 +1202,7 @@ def run_legacy_generation() -> None:
         return
 
     print("\n=== FOCUSED IMPROVEMENTS (baseline: traj1 + kappa) ===")
-    print("traj1 = robot_traj, traj5 = robot_traj5\n")
+    print("traj1 = robot_traj, traj5 = robot_traj5 (ovals), avocado = robot_traj_avocado\n")
 
     all_success_rate = 100.0 * np.mean([float(m["success"]) for m in metrics])
     all_collision_rate = 100.0 * np.mean([float(m["collision"]) for m in metrics])
@@ -1170,13 +1211,13 @@ def run_legacy_generation() -> None:
     sel_base = [m for m in metrics if m["variant"] == "robot_traj" and m["attention_mode"] == "kappa"]
     sel_t1_ttc = [m for m in metrics if m["variant"] == "robot_traj" and m["attention_mode"] == "ttc"]
     sel_t5_kappa = [m for m in metrics if m["variant"] == "robot_traj5" and m["attention_mode"] == "kappa"]
-    sel_t5_ttc = [m for m in metrics if m["variant"] == "robot_traj5" and m["attention_mode"] == "ttc"]
+    sel_avocado = [m for m in metrics if m["variant"] == "robot_traj_avocado" and m["attention_mode"] == "kappa"]
 
     rate_sets = [
         ("traj1 + kappa", sel_base),
         ("traj1 + ttc", sel_t1_ttc),
-        ("traj5 + kappa", sel_t5_kappa),
-        ("traj5 + ttc", sel_t5_ttc),
+        ("traj5 (ovals) + kappa", sel_t5_kappa),
+        ("avocado", sel_avocado),
     ]
 
     print("Rates by group:")
@@ -1188,6 +1229,46 @@ def run_legacy_generation() -> None:
         else:
             print(f"  {label}: n/a")
     print("")
+
+    if args.plot_comparison_samples > 0:
+        complete_keys = [
+            k for k, rec in sample_store.items()
+            if all(name in rec for name in ("human_traj", "traj1_kappa", "traj1_ttc", "traj5_kappa", "avocado"))
+        ]
+        if complete_keys:
+            n_plot = min(int(args.plot_comparison_samples), len(complete_keys))
+            rng = np.random.default_rng(args.plot_seed)
+            picked_idx = rng.choice(len(complete_keys), size=n_plot, replace=False)
+            picked_keys = [complete_keys[int(i)] for i in picked_idx]
+            _plot_legacy_comparison_samples(
+                sample_keys=picked_keys,
+                sample_store=sample_store,
+                output_dir=Path(args.plot_output_dir),
+            )
+            print(f"Saved {n_plot} comparison plots to: {Path(args.plot_output_dir)}")
+        else:
+            print("No complete sample groups available for comparison plotting.")
+
+    if args.animate_oval_sample >= 0:
+        anim_keys = [
+            k for k, rec in sample_store.items()
+            if all(name in rec for name in ("human_traj", "traj5_kappa"))
+        ]
+        if anim_keys:
+            anim_keys = sorted(anim_keys)
+            pick = int(np.clip(args.animate_oval_sample, 0, len(anim_keys) - 1))
+            key = anim_keys[pick]
+            rec = sample_store[key]
+            _animate_traj5_with_oval(
+                human_traj=rec["human_traj"],
+                traj5=rec["traj5_kappa"],
+                robot_start=rec["robot_start"],
+                robot_goal=rec["robot_goal"],
+                output_path=Path(args.animate_oval_output),
+            )
+            print(f"Saved traj5+oval animation to: {Path(args.animate_oval_output)}")
+        else:
+            print("No eligible sample found for traj5+oval animation.")
 
     if not sel_base:
         print("Missing baseline (traj1 + kappa).")
@@ -1202,12 +1283,12 @@ def run_legacy_generation() -> None:
     }
 
     print(
-        "Baseline (traj1 + kappa): "
-        f"path={baseline_stats['path']:.4f}, "
-        f"minDist={baseline_stats['dist']:.4f}, "
-        f"smooth={baseline_stats['smooth']:.4f}, "
-        f"minTTCproj={baseline_stats['ttc']:.4f}, "
-        f"curv={baseline_stats['curv']:.4f}"
+        "Baseline values: "
+        f"Path {baseline_stats['path']:.4f} | "
+        f"MinDist {baseline_stats['dist']:.4f} | "
+        f"Smooth {baseline_stats['smooth']:.4f} | "
+        f"MinTTCproj {baseline_stats['ttc']:.4f} | "
+        f"Curv {baseline_stats['curv']:.4f}"
     )
 
     if sel_t1_ttc:
@@ -1230,21 +1311,21 @@ def run_legacy_generation() -> None:
             "ttc": _mean_metric(sel_t5_kappa, "min_ttc_proj"),
             "curv": _mean_metric(sel_t5_kappa, "avg_curvature"),
         }
-        _print_improvement("Improvement B: traj5 + kappa vs traj1 + kappa", baseline_stats, cand)
+        _print_improvement("Improvement B: traj5 (ovals) + kappa vs traj1 + kappa", baseline_stats, cand)
     else:
-        print("Improvement B: traj5 + kappa data not available.")
+        print("Improvement B: traj5 (ovals) + kappa data not available.")
 
-    if sel_t5_ttc:
+    if sel_avocado:
         cand = {
-            "path": _mean_metric(sel_t5_ttc, "path_length"),
-            "dist": _mean_metric(sel_t5_ttc, "min_distance"),
-            "smooth": _mean_metric(sel_t5_ttc, "path_smoothness"),
-            "ttc": _mean_metric(sel_t5_ttc, "min_ttc_proj"),
-            "curv": _mean_metric(sel_t5_ttc, "avg_curvature"),
+            "path": _mean_metric(sel_avocado, "path_length"),
+            "dist": _mean_metric(sel_avocado, "min_distance"),
+            "smooth": _mean_metric(sel_avocado, "path_smoothness"),
+            "ttc": _mean_metric(sel_avocado, "min_ttc_proj"),
+            "curv": _mean_metric(sel_avocado, "avg_curvature"),
         }
-        _print_improvement("Improvement C: traj5 + ttc vs traj1 + kappa", baseline_stats, cand)
+        _print_improvement("Improvement C: AVOCADO vs traj1 + kappa", baseline_stats, cand)
     else:
-        print("Improvement C: traj5 + ttc data not available.")
+        print("Improvement C: AVOCADO data not available.")
 
     print("")
 
@@ -1253,7 +1334,7 @@ def main() -> None:
     args = parse_args()
 
     if args.mode == "generate":
-        run_legacy_generation()
+        run_legacy_generation(args)
         return
 
     dataset_path = Path(args.dataset)
@@ -1282,7 +1363,6 @@ def main() -> None:
         max_samples=args.max_samples,
         max_vel=args.max_vel,
         attention_mode=args.attention_mode,
-        head_mode=args.head_mode,
         goal_tolerance=args.goal_tolerance,
         collision_distance=args.collision_distance,
         extra_steps=args.extra_steps,
