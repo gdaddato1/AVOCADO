@@ -1,33 +1,49 @@
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext as _build_ext
 from Cython.Build import cythonize
+import os
+import os.path
+import shutil
+import subprocess
+import sys
 
 
 class BuildAvocadoExt(_build_ext):
     """Builds AVOCADO before our module."""
 
     def run(self):
-        # Build AVOCADO
-        import os
-        import os.path
-        import subprocess
-
         build_dir = os.path.abspath('build/AVOCADO')
+
         if not os.path.exists(build_dir):
             os.makedirs(build_dir)
-            subprocess.check_call(['cmake', '../..', '-DCMAKE_CXX_FLAGS=-fPIC'],
-                                  cwd=build_dir)
-        subprocess.check_call(['cmake', '--build', '.'], cwd=build_dir)
+
+        cmake_exe = shutil.which('cmake') or os.path.join(sys.prefix, 'Scripts', 'cmake.exe')
+
+        configure_cmd = [cmake_exe, '../..']
+        if os.name != 'nt':
+            configure_cmd.append('-DCMAKE_CXX_FLAGS=-fPIC')
+
+        subprocess.check_call(configure_cmd, cwd=build_dir)
+
+        subprocess.check_call([cmake_exe, '--build', '.'], cwd=build_dir)
 
         _build_ext.run(self)
+
+
+library_dirs = ['build/AVOCADO/src']
+extra_compile_args = []
+if os.name != 'nt':
+    extra_compile_args.append('-fPIC')
+else:
+    library_dirs.extend(['build/AVOCADO/src/Debug', 'build/AVOCADO/src/Release'])
 
 
 extensions = [
     Extension('avocado', ['src/*.pyx'],
               include_dirs=['src'],
               libraries=['AVOCADO'],
-              library_dirs=['build/AVOCADO/src'],
-              extra_compile_args=['-fPIC']),
+              library_dirs=library_dirs,
+              extra_compile_args=extra_compile_args),
 ]
 
 setup(
