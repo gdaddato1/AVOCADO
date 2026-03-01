@@ -1,0 +1,89 @@
+[33mcommit 93b13fbb1f86b2689e47e40553de2624bddcdd65[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m
+Author: gdaddato1 <giulia.daddato@unitn.it>
+Date:   Sun Mar 1 13:12:26 2026 +0200
+
+    Update CMake minimum version to 3.5 and enhance setup.py for cross-platform compatibility
+
+[33mcommit e8cf365f69eb58051e941a5151758a5566bc50e7[m
+Author: Giulia <giulia.daddato@unitn.it>
+Date:   Fri Feb 27 17:52:58 2026 +0200
+
+    Refactor simulate_social_nav to integrate AVOCADO_Actor for robot trajectory generation
+    
+    - Removed head_mode parameter and related logic from compute_metrics and simulate_social_nav functions.
+    - Introduced AVOCADO_Actor for robot trajectory calculations, replacing multiple trajectory variables with a single instance.
+    - Updated simulation logic to handle only one robot trajectory using AVOCADO_Actor.
+    - Removed unused variables and simplified trajectory calculations.
+    - Added functionality to plot comparison samples and animate trajectories with ovals.
+    - Updated command-line arguments to support new plotting and animation features.
+    - Adjusted evaluation metrics to include AVOCADO results in the output.
+
+[33mcommit 4d3d037d60382110f4552d52db1d081baceac6ba[m
+Author: Giulia <giulia.daddato@unitn.it>
+Date:   Thu Feb 26 16:52:52 2026 +0200
+
+    Implement feature X to enhance user experience and optimize performance
+
+[33mcommit 4fe681bb3d102424d05b9371dc96c02aae621a22[m
+Author: Giulia <giulia.daddato@unitn.it>
+Date:   Thu Feb 26 16:21:20 2026 +0200
+
+    Add kinematic trajectory simulation and plotting functionality to dataset evaluation
+
+[33mcommit b61ec3adc212bbf8abe27a1d6a8466d073c60d04[m
+Author: Giulia <giulia.daddato@unitn.it>
+Date:   Wed Feb 25 17:16:51 2026 +0200
+
+    Add AVOCADO evaluation and visualization scripts
+    
+    - Implement `evaluate_dataset_avocado.py` for batch evaluation of AVOCADO on human trajectory datasets, including metrics calculation and CSV output.
+    - Create `generate_human_paths.py` to generate various human trajectory patterns for testing scenarios.
+    - Add `make_robot_start_goal.py` to define robot start and goal positions based on human paths for different scenarios.
+    - Introduce `replay_dataset_sample_avocado.py` to visualize and replay individual dataset samples through the AVOCADO actor, with options for static plotting and animation.
+    - Develop `visualize_human_trajectory_dataset.py` for visualizing random samples from the human/robot trajectory dataset, supporting both static and animated displays.
+
+[33mcommit b2b426b3d59cf3aa095b2abf18f4dc548562a745[m
+Author: Diego Martinez-Baselga <44682605+dmartinezbaselga@users.noreply.github.com>
+Date:   Wed Nov 19 12:01:08 2025 +0100
+
+    Add poster section to README
+    
+    Added a section for the poster with an image.
+
+[33mcommit cbba4d3285bffd986bc9aa927c0ad97788703dea[m
+Author: Diego Martinez-Baselga <44682605+dmartinezbaselga@users.noreply.github.com>
+Date:   Wed Nov 19 12:00:23 2025 +0100
+
+    Add files via upload
+
+[33mcommit 2cfb0e32711e1407397ebeacd044181bec2acf1f[m
+Author: Diego Martinez-Baselga <44682605+dmartinezbaselga@users.noreply.github.com>
+Date:   Thu Oct 30 17:17:49 2025 +0100
+
+    Update README with funding acknowledgments
+    
+    Added funding acknowledgments to the README.
+
+[33mcommit b0a21dc5d48f6b956829cbee67403643474480c6[m
+Author: Diego Martinez-Baselga <44682605+dmartinezbaselga@users.noreply.github.com>
+Date:   Mon Apr 14 16:22:46 2025 +0200
+
+    Small fix in Agent.cpp
+
+[33mcommit 8edee11e372f927f201acc1774f59a6d6b655815[m
+Author: Diego Martinez-Baselga <44682605+dmartinezbaselga@users.noreply.github.com>
+Date:   Wed Apr 9 11:32:09 2025 +0200
+
+    Small fix in Agent.cpp
+
+[33mcommit 0241b399710cd179f230d0af2f3760f6d0cff1a9[m
+Author: Diego Martinez-Baselga <44682605+dmartinezbaselga@users.noreply.github.com>
+Date:   Wed Apr 9 09:13:24 2025 +0200
+
+    Update README.md
+
+[33mcommit 510e9222e58c9799ae21d00f54d72f22cc8b9b66[m
+Author: Diego Martinez-Baselga <diegomartinez@unizar.es>
+Date:   Tue Mar 4 17:14:23 2025 +0100
+
+    First commit
