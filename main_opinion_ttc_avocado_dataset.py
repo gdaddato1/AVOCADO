@@ -57,14 +57,6 @@ class OpinionParams:
     u_min: float = 0.0
     n: int = 7
     tau_u: float = 1.0
-    ttc_tau: float = 1.5
-    ttc_dist_buffer: float = 0.25
-    ttc_dist_scale: float = 0.2
-    ttc_geom_weight: float = 0.35
-    ttc_gamma_gain: float = 0.75
-    ttc_emergency_dist: float = 0.35
-    ttc_emergency_ttc: float = 2.0
-    ttc_emergency_gamma_gain: float = 2.0
 
 
 @dataclass
@@ -122,43 +114,6 @@ def attention_dynamics_ttc(par: OpinionParams, ttc: float) -> float:
     num = (par.Rr * ttc) ** par.n
     den = num + 1.0
     return par.u_min + (par.u_max - par.u_min) * (num / den)
-
-
-def _ttc_to_risk(ttc: float, tau: float) -> float:
-    if np.isnan(ttc) or np.isinf(ttc):
-        return 0.0
-    if ttc <= 0.0:
-        return 1.0
-    tau_safe = max(float(tau), 1e-6)
-    return float(np.exp(-float(ttc) / tau_safe))
-
-
-def attention_dynamics_ttc_risk(
-    par: OpinionParams,
-    ttc: float,
-    chi: float,
-    kappa: float,
-    collision_distance: float,
-) -> Tuple[float, float, bool]:
-    ttc_risk = _ttc_to_risk(ttc, par.ttc_tau)
-    d_soft = float(collision_distance) + float(par.ttc_dist_buffer)
-    dist_scale = max(float(par.ttc_dist_scale), 1e-6)
-    dist_risk = float(1.0 / (1.0 + np.exp((float(chi) - d_soft) / dist_scale)))
-    geom_risk = dist_risk * float(np.clip(kappa, 0.0, 1.0))
-
-    w = float(np.clip(par.ttc_geom_weight, 0.0, 1.0))
-    blend = (1.0 - w) * ttc_risk + w * geom_risk
-    risk = float(np.clip(max(ttc_risk, blend), 0.0, 1.0))
-
-    emergency_dist = float(collision_distance) + float(par.ttc_emergency_dist)
-    emergency_ttc = float(par.ttc_emergency_ttc)
-    emergency = bool((float(chi) <= emergency_dist) or (float(ttc) <= emergency_ttc))
-
-    u_target = par.u_min + (par.u_max - par.u_min) * risk
-    if emergency:
-        u_target = par.u_max
-        risk = 1.0
-    return float(u_target), float(risk), emergency
 
 
 def _projected_ttc_scalar(rel_pos: np.ndarray, rel_vel: np.ndarray, radius: float) -> float:
@@ -448,31 +403,18 @@ def simulate_social_nav(
         has_passed = _robot_has_passed_human(xr, xrg, xh)
         if has_passed:
             ttc_legacy = 0.0
-            ttc_risk_input = np.inf
         else:
             ttc_clean = np.inf if np.isnan(ttc_proj) else float(ttc_proj)
             ttc_legacy = ttc_clean
-            ttc_risk_input = ttc_clean
 
-        risk_for_gamma = 0.0
-        emergency_gate = False
         if attention_mode == "kappa":
             u_target = attention_dynamics_kappa(par, chi, kappa)
         elif attention_mode == "ttc":
             u_target = attention_dynamics_ttc(par, ttc_legacy)
-        elif attention_mode == "ttc_risk":
-            u_target, risk_for_gamma, emergency_gate = attention_dynamics_ttc_risk(
-                par,
-                ttc_risk_input,
-                chi,
-                kappa,
-                collision_distance,
-            )
         else:
             raise ValueError(f"Unknown attention_mode: {attention_mode}")
 
-        emergency_gain = par.ttc_emergency_gamma_gain if attention_mode == "ttc_risk" and emergency_gate else 0.0
-        gamma_eff = par.gamma_r * (1.0 + par.ttc_gamma_gain * risk_for_gamma + emergency_gain)
+        gamma_eff = par.gamma_r
         z_dot = -par.dr * z + u * np.tanh(par.alpha_r * z + gamma_eff * z_hat_body)
         u_dot = (-u + u_target) / par.tau_u
 
@@ -613,7 +555,6 @@ def _plot_legacy_comparison_samples(
 
         ax.plot(rec["traj1_kappa"][0, :], rec["traj1_kappa"][1, :], color="tab:orange", linewidth=2.0, label="traj1 + kappa")
         ax.plot(rec["traj1_ttc"][0, :], rec["traj1_ttc"][1, :], color="tab:green", linewidth=2.0, label="traj1 + ttc")
-        ax.plot(rec["traj1_ttc_risk"][0, :], rec["traj1_ttc_risk"][1, :], color="tab:red", linewidth=2.0, label="traj1 + ttc_risk")
         ax.plot(rec["avocado"][0, :], rec["avocado"][1, :], color="tab:purple", linewidth=2.0, label="avocado")
 
         ax.scatter(robot_start[0], robot_start[1], color="black", marker="^", s=60, label="robot start")
@@ -713,37 +654,18 @@ def _run_opinion_rollout_from_dataset(
         has_passed = _robot_has_passed_human(xr, xrg, xh)
         if has_passed:
             ttc_input_legacy = 0.0
-            ttc_input_risk = np.inf
         else:
             ttc_clean = np.inf if np.isnan(ttc_proj) else float(ttc_proj)
             ttc_input_legacy = ttc_clean
-            ttc_input_risk = ttc_clean
 
-        risk_for_gamma = 0.0
-        emergency_gate = False
         if attention_mode == "kappa":
             u_target = attention_dynamics_kappa(opinion_params, chi, kappa)
         elif attention_mode == "ttc":
             u_target = attention_dynamics_ttc(opinion_params, ttc_input_legacy)
-        elif attention_mode == "ttc_risk":
-            u_target, risk_for_gamma, emergency_gate = attention_dynamics_ttc_risk(
-                opinion_params,
-                ttc_input_risk,
-                chi,
-                kappa,
-                collision_distance,
-            )
         else:
             raise ValueError(f"Unknown attention_mode: {attention_mode}")
 
-        emergency_gain = (
-            opinion_params.ttc_emergency_gamma_gain
-            if attention_mode == "ttc_risk" and emergency_gate
-            else 0.0
-        )
-        gamma_eff = opinion_params.gamma_r * (
-            1.0 + opinion_params.ttc_gamma_gain * risk_for_gamma + emergency_gain
-        )
+        gamma_eff = opinion_params.gamma_r
         z_dot = -opinion_params.dr * z + u * np.tanh(opinion_params.alpha_r * z + gamma_eff * z_hat)
         u_dot = (-u + u_target) / opinion_params.tau_u
 
@@ -942,7 +864,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--goal-tolerance", type=float, default=0.2, help="Goal success tolerance")
     parser.add_argument("--collision-distance", type=float, default=0.4, help="Collision threshold distance")
     parser.add_argument("--extra-steps", type=int, default=40, help="Extra rollout steps after dataset horizon")
-    parser.add_argument("--attention-mode", choices=["kappa", "ttc", "ttc_risk"], default="ttc")
+    parser.add_argument("--attention-mode", choices=["kappa", "ttc"], default="ttc")
 
     parser.add_argument("--dr", type=float, default=2.4)
     parser.add_argument("--alpha-r", type=float, default=0.3)
@@ -954,14 +876,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--u-min", type=float, default=0.0)
     parser.add_argument("--n", type=int, default=7)
     parser.add_argument("--tau-u", type=float, default=1.0)
-    parser.add_argument("--ttc-tau", type=float, default=1.5, help="Time constant for TTC risk exp(-ttc/tau)")
-    parser.add_argument("--ttc-dist-buffer", type=float, default=0.25, help="Extra distance margin for geometric risk")
-    parser.add_argument("--ttc-dist-scale", type=float, default=0.2, help="Distance risk sigmoid scale")
-    parser.add_argument("--ttc-geom-weight", type=float, default=0.35, help="Weight of geometric risk in TTC-risk blend")
-    parser.add_argument("--ttc-gamma-gain", type=float, default=0.75, help="Risk gain applied to gamma_r in ttc_risk mode")
-    parser.add_argument("--ttc-emergency-dist", type=float, default=0.35, help="Extra distance margin that triggers emergency attention")
-    parser.add_argument("--ttc-emergency-ttc", type=float, default=2.0, help="TTC threshold that triggers emergency attention")
-    parser.add_argument("--ttc-emergency-gamma-gain", type=float, default=2.0, help="Extra gamma gain applied during emergency in ttc_risk mode")
     parser.add_argument(
         "--avocado-a",
         type=float,
@@ -1004,7 +918,7 @@ def run_legacy_generation(args: argparse.Namespace) -> None:
 
     N_per_scenario = 20
     scenarios = ["meeting", "meeting_delayed_arc", "abrupt_change", "step_pattern", "zigzag"]
-    attention_modes = ["kappa", "ttc", "ttc_risk"]
+    attention_modes = ["kappa", "ttc"]
     v_human_list = [0.8, 1.0]
     v_robot_list = [0.5, 0.7]
 
@@ -1025,14 +939,6 @@ def run_legacy_generation(args: argparse.Namespace) -> None:
             "u_min": args.u_min,
             "n": args.n,
             "tau_u": args.tau_u,
-            "ttc_tau": args.ttc_tau,
-            "ttc_dist_buffer": args.ttc_dist_buffer,
-            "ttc_dist_scale": args.ttc_dist_scale,
-            "ttc_geom_weight": args.ttc_geom_weight,
-            "ttc_gamma_gain": args.ttc_gamma_gain,
-            "ttc_emergency_dist": args.ttc_emergency_dist,
-            "ttc_emergency_ttc": args.ttc_emergency_ttc,
-            "ttc_emergency_gamma_gain": args.ttc_emergency_gamma_gain,
         }
     )
     avocado_params = get_avocado_params(
@@ -1097,8 +1003,6 @@ def run_legacy_generation(args: argparse.Namespace) -> None:
                         sample_store[sample_key]["avocado"] = sim_result["robot_traj_avocado"].copy()
                     elif attention_mode == "ttc":
                         sample_store[sample_key]["traj1_ttc"] = sim_result["robot_traj"].copy()
-                    elif attention_mode == "ttc_risk":
-                        sample_store[sample_key]["traj1_ttc_risk"] = sim_result["robot_traj"].copy()
 
                     sim_result["meta"] = {
                         "scenario": scenario,
@@ -1171,13 +1075,11 @@ def run_legacy_generation(args: argparse.Namespace) -> None:
 
     sel_base = [m for m in metrics if m["variant"] == "robot_traj" and m["attention_mode"] == "kappa"]
     sel_t1_ttc = [m for m in metrics if m["variant"] == "robot_traj" and m["attention_mode"] == "ttc"]
-    sel_t1_ttc_risk = [m for m in metrics if m["variant"] == "robot_traj" and m["attention_mode"] == "ttc_risk"]
     sel_avocado = [m for m in metrics if m["variant"] == "robot_traj_avocado" and m["attention_mode"] == "kappa"]
 
     rate_sets = [
         ("traj1 + kappa", sel_base),
         ("traj1 + ttc", sel_t1_ttc),
-        ("traj1 + ttc_risk", sel_t1_ttc_risk),
         ("avocado", sel_avocado),
     ]
 
@@ -1194,7 +1096,7 @@ def run_legacy_generation(args: argparse.Namespace) -> None:
     if args.plot_comparison_samples > 0:
         complete_keys = [
             k for k, rec in sample_store.items()
-            if all(name in rec for name in ("human_traj", "traj1_kappa", "traj1_ttc", "traj1_ttc_risk", "avocado"))
+            if all(name in rec for name in ("human_traj", "traj1_kappa", "traj1_ttc", "avocado"))
         ]
         if complete_keys:
             n_plot = min(int(args.plot_comparison_samples), len(complete_keys))
@@ -1243,18 +1145,6 @@ def run_legacy_generation(args: argparse.Namespace) -> None:
     else:
         print("Improvement A: traj1 + ttc data not available.")
 
-    if sel_t1_ttc_risk:
-        cand = {
-            "path": _mean_metric(sel_t1_ttc_risk, "path_length"),
-            "dist": _mean_metric(sel_t1_ttc_risk, "min_distance"),
-            "smooth": _mean_metric(sel_t1_ttc_risk, "path_smoothness"),
-            "ttc": _mean_metric(sel_t1_ttc_risk, "min_ttc_proj"),
-            "curv": _mean_metric(sel_t1_ttc_risk, "avg_curvature"),
-        }
-        _print_improvement("Improvement A2: traj1 + ttc_risk vs traj1 + kappa", baseline_stats, cand)
-    else:
-        print("Improvement A2: traj1 + ttc_risk data not available.")
-
     if sel_avocado:
         cand = {
             "path": _mean_metric(sel_avocado, "path_length"),
@@ -1293,14 +1183,6 @@ def main() -> None:
             "u_min": args.u_min,
             "n": args.n,
             "tau_u": args.tau_u,
-            "ttc_tau": args.ttc_tau,
-            "ttc_dist_buffer": args.ttc_dist_buffer,
-            "ttc_dist_scale": args.ttc_dist_scale,
-            "ttc_geom_weight": args.ttc_geom_weight,
-            "ttc_gamma_gain": args.ttc_gamma_gain,
-            "ttc_emergency_dist": args.ttc_emergency_dist,
-            "ttc_emergency_ttc": args.ttc_emergency_ttc,
-            "ttc_emergency_gamma_gain": args.ttc_emergency_gamma_gain,
         }
     )
 
