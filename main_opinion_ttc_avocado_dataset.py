@@ -52,10 +52,10 @@ class OpinionParams:
     alpha_r: float = 0.3
     gamma_r: float = 10.0
     b_r: float = 0.0
-    Rr: float = 4.0
+    Rr: float = 3.0
     kr: float = 1.5
     beta_r: float = np.pi / 4.0
-    u_max: float = 1.5
+    u_max: float = 2.0
     u_min: float = 0.0
     n: int = 7
     tau_u: float = 1.0
@@ -113,9 +113,10 @@ def attention_dynamics_kappa(par: OpinionParams, chi: float, kappa: float) -> fl
 
 
 def attention_dynamics_ttc(par: OpinionParams, ttc: float) -> float:
-    if np.isinf(ttc):
+    if np.isnan(ttc) or np.isinf(ttc) or ttc <= 0.0:
         return par.u_min
-    num = (par.Rr * ttc) ** par.n
+    #ttc_eff = max(float(ttc), 1e-8)
+    num = (par.Rr / ttc) ** par.n
     den = num + 1.0
     return par.u_min + (par.u_max - par.u_min) * (num / den)
 
@@ -435,7 +436,7 @@ def simulate_social_nav(
 
         has_passed = _robot_has_passed_human(xr, xrg, xh)
         if has_passed:
-            ttc_legacy = 0.0
+            ttc_legacy = np.inf
         else:
             ttc_clean = np.inf if np.isnan(ttc_proj) else float(ttc_proj)
             ttc_legacy = ttc_clean
@@ -707,7 +708,7 @@ def _run_opinion_rollout_from_dataset(
         ttc_proj = _projected_ttc_scalar(rel_pos, rel_vel)
         has_passed = _robot_has_passed_human(xr, xrg, xh)
         if has_passed:
-            ttc_input_legacy = 0.0
+            ttc_input_legacy = np.inf
         else:
             ttc_clean = np.inf if np.isnan(ttc_proj) else float(ttc_proj)
             ttc_input_legacy = ttc_clean
