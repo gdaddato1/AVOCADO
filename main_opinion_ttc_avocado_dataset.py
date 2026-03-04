@@ -5,6 +5,7 @@ import argparse
 import csv
 import os
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -50,10 +51,11 @@ class OpinionParams:
     dr: float = 2.4
     alpha_r: float = 0.3
     gamma_r: float = 10.0
-    Rr: float = 6.0
+    b_r: float = 0.0
+    Rr: float = 4.0
     kr: float = 1.5
     beta_r: float = np.pi / 4.0
-    u_max: float = 2.0
+    u_max: float = 1.5
     u_min: float = 0.0
     n: int = 7
     tau_u: float = 1.0
@@ -91,6 +93,8 @@ def get_avocado_params(
     par = AvocadoParams()
     if opinion_params is not None:
         par.a = float(opinion_params.alpha_r)
+        par.c = float(opinion_params.gamma_r)
+        par.d = float(opinion_params.dr)
 
     if not overrides:
         return par
@@ -110,30 +114,28 @@ def attention_dynamics_kappa(par: OpinionParams, chi: float, kappa: float) -> fl
 
 def attention_dynamics_ttc(par: OpinionParams, ttc: float) -> float:
     if np.isinf(ttc):
-        return par.u_max
+        return par.u_min
     num = (par.Rr * ttc) ** par.n
     den = num + 1.0
     return par.u_min + (par.u_max - par.u_min) * (num / den)
 
 
-def _projected_ttc_scalar(rel_pos: np.ndarray, rel_vel: np.ndarray, radius: float) -> float:
-    c = float(np.dot(rel_pos, rel_pos) - radius**2)
-    if c <= 0:
+def _projected_ttc_scalar(
+    rel_pos: np.ndarray,
+    rel_vel: np.ndarray,
+    eps_ttc: float = 1e-8,
+) -> float:
+    dist = float(np.linalg.norm(rel_pos))
+    eps = max(float(eps_ttc), 1e-12)
+    if dist <= eps:
         return 0.0
-    a = float(np.dot(rel_vel, rel_vel))
-    b = float(2.0 * np.dot(rel_pos, rel_vel))
-    if a < 1e-12:
-        return np.nan
-    disc = b * b - 4.0 * a * c
-    if disc < 0:
-        return np.nan
-    sqrt_disc = np.sqrt(disc)
-    t1 = (-b - sqrt_disc) / (2.0 * a)
-    t2 = (-b + sqrt_disc) / (2.0 * a)
-    candidates = [t for t in (t1, t2) if t >= 0.0]
-    if not candidates:
-        return np.nan
-    return float(min(candidates))
+
+    e_rh = np.asarray(rel_pos, dtype=float).reshape(2) / max(dist, eps)
+    closing_speed = -float(np.dot(np.asarray(rel_vel, dtype=float).reshape(2), e_rh))
+
+    if closing_speed > eps:
+        return float(dist / closing_speed)
+    return np.nan
 
 
 def _min_abs_projected_ttc_single(
@@ -155,7 +157,7 @@ def _min_abs_projected_ttc_single(
     for step in range(T - 1):
         rel_pos = human_xy[:, step] - robot_xy[:, step]
         rel_vel = vel_h[:, step] - vel_r[:, step]
-        ttc_now = _projected_ttc_scalar(rel_pos, rel_vel, collision_distance)
+        ttc_now = _projected_ttc_scalar(rel_pos, rel_vel)
         if not np.isnan(ttc_now):
             best_abs_ttc = min(best_abs_ttc, step * dt + float(ttc_now))
 
@@ -182,7 +184,7 @@ def _min_abs_projected_ttc_dataset(
         xh, vh = _human_state_for_opinion(human_positions, human_velocities, step, xr)
         rel_pos = xh - xr
         rel_vel = vh - vr
-        ttc_now = _projected_ttc_scalar(rel_pos, rel_vel, collision_distance)
+        ttc_now = _projected_ttc_scalar(rel_pos, rel_vel)
         if not np.isnan(ttc_now):
             best_abs_ttc = min(best_abs_ttc, step * dt + float(ttc_now))
 
@@ -318,6 +320,32 @@ def compute_metrics(
     metrics["weighted_comfort_efficiency"] = float(
         w_comfort * (avg_distance / 1.5) + w_efficiency * metrics["path_efficiency"]
     )
+
+    ttc_norm = 0.0
+    if np.isfinite(projected_ttc) and projected_ttc > 0.0:
+        ttc_norm = float(projected_ttc / (projected_ttc + 1.0))
+
+    safety_norm = float(metrics["min_distance"] / (metrics["min_distance"] + collision_distance + 1e-12))
+    efficiency_norm = float(np.clip(metrics["path_efficiency"], 0.0, 1.0))
+    smoothness_norm = float(np.clip(metrics["path_smoothness"], 0.0, 1.0))
+
+    metrics["tradeoff_score"] = float(
+        0.35 * safety_norm
+        + 0.25 * efficiency_norm
+        + 0.20 * smoothness_norm
+        + 0.20 * ttc_norm
+    )
+
+    d_in = metrics["min_distance_in_cone"]
+    if np.isnan(d_in):
+        d_in = metrics["min_distance"]
+    d_val = max(float(metrics["min_distance"]), 0.0)
+    L_val = max(float(metrics["path_length"]), 1e-12)
+    kappa_val = max(float(metrics["avg_curvature"]), 0.0)
+    metrics["physical_tradeoff_score"] = float(
+        np.sqrt(max(float(d_in), 0.0) * d_val) / (L_val * (1.0 + kappa_val))
+    )
+
     metrics["collision_distance"] = float(collision_distance)
 
     metrics["scenario"] = scenario_type
@@ -384,9 +412,14 @@ def simulate_social_nav(
     eta_h_vals: List[float] = []
     theta_vals6 = [theta6]
     z_hat_body_vals: List[float] = []
+    opinion_compute_time_s = 0.0
+    avocado_compute_time_s = 0.0
+    opinion_steps = 0
+    avocado_steps = 0
 
     t = 0.0
     while np.linalg.norm(xr - xrg) > 0.5 and t < max_time:
+        tic_opinion = time.perf_counter()
         eta_body = wrap_to_pi(np.arctan2(xr[1] - xh[1], xr[0] - xh[0]) - theta_h)
         chi = float(np.linalg.norm(xh - xr))
         kappa = max(np.cos(eta_body), 0.0)
@@ -398,7 +431,7 @@ def simulate_social_nav(
 
         v_r_vec = v_robot * np.array([np.cos(theta), np.sin(theta)], dtype=float)
         v_h_vec = v_human * np.array([np.cos(theta_h), np.sin(theta_h)], dtype=float)
-        ttc_proj = _projected_ttc_scalar(xh - xr, v_h_vec - v_r_vec, collision_distance)
+        ttc_proj = _projected_ttc_scalar(xh - xr, v_h_vec - v_r_vec)
 
         has_passed = _robot_has_passed_human(xr, xrg, xh)
         if has_passed:
@@ -415,13 +448,15 @@ def simulate_social_nav(
             raise ValueError(f"Unknown attention_mode: {attention_mode}")
 
         gamma_eff = par.gamma_r
-        z_dot = -par.dr * z + u * np.tanh(par.alpha_r * z + gamma_eff * z_hat_body)
+        z_dot = -par.dr * z + u * np.tanh(par.alpha_r * z + gamma_eff * z_hat_body) + par.b_r
         u_dot = (-u + u_target) / par.tau_u
 
         z += z_dot * dt
         u += u_dot * dt
         omega = par.kr * np.sin(par.beta_r * np.tanh(z) + phi_r)
         theta = wrap_to_pi(theta + omega * dt)
+        opinion_compute_time_s += time.perf_counter() - tic_opinion
+        opinion_steps += 1
 
         if np.linalg.norm(xh - human_waypoints[:, current_wp]) < 0.2:
             current_wp = min(current_wp + 1, human_waypoints.shape[1] - 1)
@@ -452,6 +487,7 @@ def simulate_social_nav(
             xr[1] += v_robot * np.sin(theta) * dt
 
         if np.linalg.norm(xr6 - xrg) > 0.5:
+            tic_avocado = time.perf_counter()
             vh6 = v_human * np.array([np.cos(theta_h), np.sin(theta_h)], dtype=float)
             cmd6 = avocado_actor.act(
                 agent_positions=xr6.reshape(1, 2),
@@ -465,6 +501,8 @@ def simulate_social_nav(
             xr6 = xr6 + robot_vel6 * dt
             if np.linalg.norm(robot_vel6) > 1e-8:
                 theta6 = float(np.arctan2(robot_vel6[1], robot_vel6[0]))
+            avocado_compute_time_s += time.perf_counter() - tic_avocado
+            avocado_steps += 1
         else:
             robot_vel6 = np.zeros(2, dtype=float)
 
@@ -481,6 +519,10 @@ def simulate_social_nav(
         "theta_avocado": np.asarray(theta_vals6),
         "eta_h": np.asarray(eta_h_vals),
         "z_hat_body": np.asarray(z_hat_body_vals),
+        "timing": {
+            "opinion_mean_ms": 1000.0 * opinion_compute_time_s / max(opinion_steps, 1),
+            "avocado_mean_ms": 1000.0 * avocado_compute_time_s / max(avocado_steps, 1),
+        },
     }
     return result
 
@@ -500,24 +542,33 @@ def _print_improvement(
     b_smooth = baseline["smooth"]
     b_ttc = baseline["ttc"]
     b_curv = baseline["curv"]
+    b_tradeoff = baseline["tradeoff"]
+    b_phys_tradeoff = baseline["phys_tradeoff"]
+    b_comp = baseline["comp_ms"]
 
     c_path = candidate["path"]
     c_dist = candidate["dist"]
     c_smooth = candidate["smooth"]
     c_ttc = candidate["ttc"]
     c_curv = candidate["curv"]
+    c_tradeoff = candidate["tradeoff"]
+    c_phys_tradeoff = candidate["phys_tradeoff"]
+    c_comp = candidate["comp_ms"]
 
     imp_path = 100.0 * (b_path - c_path) / max(abs(b_path), np.finfo(float).eps)
     imp_dist = 100.0 * (c_dist - b_dist) / max(abs(b_dist), np.finfo(float).eps)
     imp_smooth = 100.0 * (c_smooth - b_smooth) / max(abs(b_smooth), np.finfo(float).eps)
     imp_ttc = 100.0 * (c_ttc - b_ttc) / max(abs(b_ttc), np.finfo(float).eps)
     imp_curv = 100.0 * (b_curv - c_curv) / max(abs(b_curv), np.finfo(float).eps)
+    imp_tradeoff = 100.0 * (c_tradeoff - b_tradeoff) / max(abs(b_tradeoff), np.finfo(float).eps)
+    imp_phys_tradeoff = 100.0 * (c_phys_tradeoff - b_phys_tradeoff) / max(abs(b_phys_tradeoff), np.finfo(float).eps)
+    imp_comp = 100.0 * (b_comp - c_comp) / max(abs(b_comp), np.finfo(float).eps)
 
     print(label)
     print(
         "  Path Length: {:+.2f}% | Min Distance: {:+.2f}% | Smoothness: {:+.2f}% | "
-        "Min TTC Proj: {:+.2f}% | Avg Curvature: {:+.2f}%".format(
-            imp_path, imp_dist, imp_smooth, imp_ttc, imp_curv
+        "Min TTC Proj: {:+.2f}% | Avg Curvature: {:+.2f}% | Tradeoff: {:+.2f}% | PhysTradeoff: {:+.2f}% | CompCost: {:+.2f}%".format(
+            imp_path, imp_dist, imp_smooth, imp_ttc, imp_curv, imp_tradeoff, imp_phys_tradeoff, imp_comp
         )
     )
     print(
@@ -526,7 +577,10 @@ def _print_improvement(
         f"MinDist {c_dist:.4f} | "
         f"Smooth {c_smooth:.4f} | "
         f"MinTTCproj {c_ttc:.4f} | "
-        f"Curv {c_curv:.4f}"
+        f"Curv {c_curv:.4f} | "
+        f"Tradeoff {c_tradeoff:.4f} | "
+        f"PhysTradeoff {c_phys_tradeoff:.4f} | "
+        f"CompCost(ms) {c_comp:.4f}"
     )
 
 
@@ -650,7 +704,7 @@ def _run_opinion_rollout_from_dataset(
         v_r_vec = robot_speed * np.array([np.cos(theta), np.sin(theta)], dtype=float)
         rel_pos = xh - xr
         rel_vel = vh - v_r_vec
-        ttc_proj = _projected_ttc_scalar(rel_pos, rel_vel, collision_distance)
+        ttc_proj = _projected_ttc_scalar(rel_pos, rel_vel)
         has_passed = _robot_has_passed_human(xr, xrg, xh)
         if has_passed:
             ttc_input_legacy = 0.0
@@ -666,7 +720,7 @@ def _run_opinion_rollout_from_dataset(
             raise ValueError(f"Unknown attention_mode: {attention_mode}")
 
         gamma_eff = opinion_params.gamma_r
-        z_dot = -opinion_params.dr * z + u * np.tanh(opinion_params.alpha_r * z + gamma_eff * z_hat)
+        z_dot = -opinion_params.dr * z + u * np.tanh(opinion_params.alpha_r * z + gamma_eff * z_hat) + opinion_params.b_r
         u_dot = (-u + u_target) / opinion_params.tau_u
 
         z += z_dot * dt
@@ -869,6 +923,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dr", type=float, default=2.4)
     parser.add_argument("--alpha-r", type=float, default=0.3)
     parser.add_argument("--gamma-r", type=float, default=10.0)
+    parser.add_argument("--b-r", type=float, default=0.0)
     parser.add_argument("--Rr", type=float, default=6.0)
     parser.add_argument("--kr", type=float, default=1.5)
     parser.add_argument("--beta-r", type=float, default=float(np.pi / 4.0))
@@ -881,6 +936,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help="Override AVOCADO a gain. If omitted, it is tied to --alpha-r for consistency.",
+    )
+    parser.add_argument(
+        "--avocado-c",
+        type=float,
+        default=None,
+        help="Override AVOCADO c gain. If omitted, it is tied to --gamma-r for consistency.",
+    )
+    parser.add_argument(
+        "--avocado-d",
+        type=float,
+        default=None,
+        help="Override AVOCADO d gain. If omitted, it is tied to --dr for consistency.",
     )
     parser.add_argument(
         "--plot-comparison-samples",
@@ -932,6 +999,7 @@ def run_legacy_generation(args: argparse.Namespace) -> None:
             "dr": args.dr,
             "alpha_r": args.alpha_r,
             "gamma_r": args.gamma_r,
+            "b_r": args.b_r,
             "Rr": args.Rr,
             "kr": args.kr,
             "beta_r": args.beta_r,
@@ -945,6 +1013,8 @@ def run_legacy_generation(args: argparse.Namespace) -> None:
         opinion_params=opinion_params,
         overrides={
             "a": args.avocado_a,
+            "c": args.avocado_c,
+            "d": args.avocado_d,
         },
     )
 
@@ -1038,6 +1108,10 @@ def run_legacy_generation(args: argparse.Namespace) -> None:
                             m["reached_goal"] = bool(m["goal_distance_final"] <= goal_threshold)
                             m["collision"] = bool(m["min_distance"] < collision_distance)
                             m["success"] = bool(not m["collision"])
+                            if field == "robot_traj":
+                                m["compute_time_ms"] = float(sim_result["timing"]["opinion_mean_ms"])
+                            elif field == "robot_traj_avocado":
+                                m["compute_time_ms"] = float(sim_result["timing"]["avocado_mean_ms"])
                             m["safety_efficiency_tradeoff"] = float(
                                 m["min_distance"] / (m["path_length"] + 1e-6)
                             )
@@ -1122,6 +1196,9 @@ def run_legacy_generation(args: argparse.Namespace) -> None:
         "smooth": _mean_metric(sel_base, "path_smoothness"),
         "ttc": _mean_metric(sel_base, "min_ttc_proj"),
         "curv": _mean_metric(sel_base, "avg_curvature"),
+        "tradeoff": _mean_metric(sel_base, "tradeoff_score"),
+        "phys_tradeoff": _mean_metric(sel_base, "physical_tradeoff_score"),
+        "comp_ms": _mean_metric(sel_base, "compute_time_ms"),
     }
 
     print(
@@ -1130,7 +1207,10 @@ def run_legacy_generation(args: argparse.Namespace) -> None:
         f"MinDist {baseline_stats['dist']:.4f} | "
         f"Smooth {baseline_stats['smooth']:.4f} | "
         f"MinTTCproj {baseline_stats['ttc']:.4f} | "
-        f"Curv {baseline_stats['curv']:.4f}"
+        f"Curv {baseline_stats['curv']:.4f} | "
+        f"Tradeoff {baseline_stats['tradeoff']:.4f} | "
+        f"PhysTradeoff {baseline_stats['phys_tradeoff']:.4f} | "
+        f"CompCost(ms) {baseline_stats['comp_ms']:.4f}"
     )
 
     if sel_t1_ttc:
@@ -1140,6 +1220,9 @@ def run_legacy_generation(args: argparse.Namespace) -> None:
             "smooth": _mean_metric(sel_t1_ttc, "path_smoothness"),
             "ttc": _mean_metric(sel_t1_ttc, "min_ttc_proj"),
             "curv": _mean_metric(sel_t1_ttc, "avg_curvature"),
+            "tradeoff": _mean_metric(sel_t1_ttc, "tradeoff_score"),
+            "phys_tradeoff": _mean_metric(sel_t1_ttc, "physical_tradeoff_score"),
+            "comp_ms": _mean_metric(sel_t1_ttc, "compute_time_ms"),
         }
         _print_improvement("Improvement A: traj1 + ttc vs traj1 + kappa", baseline_stats, cand)
     else:
@@ -1152,6 +1235,9 @@ def run_legacy_generation(args: argparse.Namespace) -> None:
             "smooth": _mean_metric(sel_avocado, "path_smoothness"),
             "ttc": _mean_metric(sel_avocado, "min_ttc_proj"),
             "curv": _mean_metric(sel_avocado, "avg_curvature"),
+            "tradeoff": _mean_metric(sel_avocado, "tradeoff_score"),
+            "phys_tradeoff": _mean_metric(sel_avocado, "physical_tradeoff_score"),
+            "comp_ms": _mean_metric(sel_avocado, "compute_time_ms"),
         }
         _print_improvement("Improvement B: AVOCADO vs traj1 + kappa", baseline_stats, cand)
     else:
@@ -1176,6 +1262,7 @@ def main() -> None:
             "dr": args.dr,
             "alpha_r": args.alpha_r,
             "gamma_r": args.gamma_r,
+            "b_r": args.b_r,
             "Rr": args.Rr,
             "kr": args.kr,
             "beta_r": args.beta_r,
