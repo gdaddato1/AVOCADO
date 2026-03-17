@@ -25,7 +25,10 @@ class BuildAvocadoExt(_build_ext):
 
         subprocess.check_call(configure_cmd, cwd=build_dir)
 
-        subprocess.check_call([cmake_exe, '--build', '.'], cwd=build_dir)
+        build_cmd = [cmake_exe, '--build', '.']
+        if os.name == 'nt':
+            build_cmd.extend(['--config', 'Release'])
+        subprocess.check_call(build_cmd, cwd=build_dir)
 
         _build_ext.run(self)
 
@@ -35,7 +38,7 @@ extra_compile_args = []
 if os.name != 'nt':
     extra_compile_args.append('-fPIC')
 else:
-    library_dirs.extend(['build/AVOCADO/src/Debug', 'build/AVOCADO/src/Release'])
+    library_dirs.insert(0, 'build/AVOCADO/src/Release')
 
 
 extensions = [

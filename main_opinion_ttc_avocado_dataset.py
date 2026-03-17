@@ -54,7 +54,7 @@ class OpinionParams:
     b_r: float = 0.0
     Rr: float = 6.0
     kr: float = 1.5
-    beta_r: float = np.pi / 4.0
+    beta_r: float = np.pi / 5.0
     u_max: float = 2.0
     u_min: float = 0.0
     n: int = 7
