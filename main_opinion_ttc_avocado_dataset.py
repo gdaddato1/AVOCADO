@@ -50,9 +50,9 @@ def wrap_to_pi(angle: float | np.ndarray) -> float | np.ndarray:
 class OpinionParams:
     dr: float = 2.4
     alpha_r: float = 0.3
-    gamma_r: float = 10.0
+    gamma_r: float = 5.0
     b_r: float = 0.0
-    Rr: float = 3.0
+    Rr: float = 6.0
     kr: float = 1.5
     beta_r: float = np.pi / 4.0
     u_max: float = 2.0
@@ -903,7 +903,7 @@ def parse_args() -> argparse.Namespace:
         help="generate: legacy .mat generation flow; evaluate-dataset: run opinion rollout on a provided .npz dataset",
     )
 
-    parser.add_argument("--dataset", default="data/human_robot_trajectories_kinematic.npz", help="Input dataset .npz")
+    parser.add_argument("--dataset", default="data/dataset_thor_opinion_converted.npz", help="Input dataset .npz")
     parser.add_argument(
         "--output-csv",
         default="data/opinion_batch_eval.csv",
